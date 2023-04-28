@@ -124,5 +124,3 @@ Export.table.toDrive({
   description:'lateBroodNDVI', // <-- change file name here
   fileFormat: 'CSV'
 }); 
-  
-//  // TRY TO INTERPRET WHAT IS GOING ON IN THIS CODE AFTER LINE 24
