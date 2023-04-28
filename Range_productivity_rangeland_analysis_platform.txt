@@ -1,0 +1,154 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var region = ee.FeatureCollection("users/4932539/eastOR");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+/*
+Code identifies annual probability of rangeland resilience in late summer - i.e. how 
+often does a site remain green. Rangeland defined as areas with <20% tree cover. Output 
+important to identifying climate resilient 
+rangeland ecosystems.  
+*/
+
+//=== helper functions =====================================================
+var bandRenamel8 = function(image){
+  var rename = image.select(['B2', 'B3', 'B4', 'B5', 'B6', 'B7'],
+  ['B1', 'B2', 'B3', 'B4', 'B5', 'B7']);
+  return rename;
+};
+
+var cloudMask = function(image){
+  var quality =image.select(['pixel_qa']);
+  // clear = no clouds, cloud shadow, or snow
+  var clear = quality.bitwiseAnd(8).eq(0) // cloud shadow
+                .and(quality.bitwiseAnd(32).eq(0)) // cloud
+                .and(quality.bitwiseAnd(16).eq(0)); // snow
+  image = image.mask(clear);
+  return image;
+}; 
+
+var ndviCalc = function(image) {
+  var ndvi = image.normalizedDifference(['B4', 'B3']);
+  ndvi = ndvi.select([0], ['ndvi']);
+  var imageDate = image.get('system:time_start');
+  return ndvi.set('system:time_start', imageDate);
+};
+
+var treeCover = function(image){ // <-- extract tree cover < 20% form RAP imageCollection (i.e., mask out tree cover that's < 20%)
+  var cover = image.select('TREE');
+  var treeMask = cover.updateMask(cover.lt(20)); // (lt = less than, gt = greater than, lte = less than or equal to, gte = greater than or equal to)
+  return treeMask;
+};
+
+var ndviMask = function(image){ // <-- mask ndvi that are < 0.3 in ndviAnnual imageCollection (0.3 is the threshold we use for distinguishing between productive (>0.3) and not productive (<0.3))
+  var productivity = image.select([0]).unmask(); // turn all the masking on the image off otherwise risk complicating the rest of the model / interfering with final outputs. 
+  var ndviMask = productivity.mask(productivity.gte(0.3));
+  return ndviMask;
+};
+
+var palette = [
+  'FFFFFF', 'CE7E45', 'DF923D', 'F1B555', 'FCD163', '99B718', //<-- color palette used to draw ndviProb results (use HEX codes) 
+  '74A901', '66A000', '529400', '3E8601', '207401', '056201',
+  '004C00', '023B01', '012E01', '011D01', '011301'];
+
+//============================================================================
+//    create imageCollection - filter landsat l5, l7, l8, and merge 
+//============================================================================
+
+var periodl5 = ee.ImageCollection('LANDSAT/LT05/C01/T1_SR')
+  .filterBounds(region.geometry().bounds())
+  .filter((ee.Filter.date('1984-01-01', '2011-12-31')))
+  .map(cloudMask);
+  
+
+// print(periodl5, 'periodl5');
+
+var periodl7 = ee.ImageCollection('LANDSAT/LE07/C01/T1_SR')
+  .filterBounds(region.geometry().bounds())
+  .filter((ee.Filter.date('2012-01-01', '2012-12-31')))
+  .map(cloudMask);
+
+// print(periodl7, 'periodl7');
+
+var periodl8 = ee.ImageCollection('LANDSAT/LC08/C01/T1_SR')
+  .filterBounds(region.geometry().bounds())
+  .filter((ee.Filter.date('2013-01-01', '2020-12-31')))
+  .map(cloudMask)
+  .map(bandRenamel8);
+// print(periodl8, 'periodl8');
+
+var period = ee.ImageCollection(periodl5.merge(periodl7).merge(periodl8)); 
+// print (period.limit(1),'period');
+
+//============================================================================
+//    generate ndvi data by year
+//============================================================================
+
+// define years of interest
+var startYear = 1984;
+var endYear = 2020;
+
+var ndvi = ee.ImageCollection(period) //<--- convert every image in collection to ndvi image and fillter to late summer
+  .filterDate(startYear.toString(), (endYear +1).toString())
+  .filter(ee.Filter.dayOfYear(183,274)) //Jul 1-Sep 30
+  .map(ndviCalc);
+
+// print(ndvi,'ndviCollection');
+
+var years = ee.List.sequence(startYear, endYear); // <-- generate list of monitoring years
+
+var ndviAnnual = ee.ImageCollection.fromImages(years.map(function(year){ 
+  var yearCollection = ndvi
+  .filter(ee.Filter.calendarRange(year, year, 'year'));
+  var yearNDVI = yearCollection
+  .mean();
+  return yearNDVI;
+}));
+
+var ndviAnnual = ndviAnnual.map(ndviMask); 
+
+//============================================================================
+//    generate productivity and rangeland masks
+//============================================================================
+
+// Select pixels from 2019 rap layer with tree cover < 20%
+
+var rapCollection = ee.ImageCollection('projects/rangeland-analysis-platform/vegetation-cover-v2');
+print(rapCollection, 'rapCollection');
+
+var   rap = rapCollection
+  .map(treeCover)
+  .filter(ee.Filter.eq('year', 2019)).first(); // <-- just grab the image from 2019
+  
+Map.addLayer (ee.Image(rap).clip(region), null, 'rap');
+
+
+var ndviCount = ndviAnnual.reduce(ee.Reducer.count()); 
+// var ndviCount = ee.Image(ndviCount)
+
+
+print(ndviCount, 'ndviCount');
+var ndviProb = ndviCount.select([0]).divide(36).multiply(100).updateMask(rap); 
+
+//Map.addLayer(ndviCount, null, 'ndviCount');
+Map.addLayer(ndviProb.clip(region), {min: 0, max: 100, palette: palette}, 'ndviProb'); 
+Map.addLayer(ee.Image().paint(region, 1, 3), null, 'region'); 
+
+Export.image.toDrive({ // how to export an image directly to your drive. 
+  image: ndviProb,
+  folder: 'wetOREGON',
+  description: 'ndviProbability',
+  scale: 30,
+  region: region,
+  crs: 'EPSG:4326',
+  maxPixels: 1e10
+});
+
+Export.image.toDrive({  
+  image: rap,
+  folder: 'wetOREGON',
+  description: 'treeMask',
+  scale: 30,
+  region: region,
+  crs: 'EPSG:4326',
+  maxPixels: 1e10
+});
+

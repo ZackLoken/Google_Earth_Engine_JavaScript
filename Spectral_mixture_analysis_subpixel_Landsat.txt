@@ -1,0 +1,125 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var prjPoly = 
+    /* color: #d63000 */
+    /* shown: false */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.Polygon(
+        [[[-111.46302086616316, 42.367058835710445],
+          [-111.46302086616316, 41.97010098837001],
+          [-111.16639000678816, 41.97010098837001],
+          [-111.16639000678816, 42.367058835710445]]], null, false),
+    water = 
+    /* color: #1f18d6 */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.Polygon(
+        [[[-111.33860414312164, 42.10353722242687],
+          [-111.33860414312164, 42.08315610946262],
+          [-111.30427186773102, 42.08315610946262],
+          [-111.30427186773102, 42.10353722242687]]], null, false),
+    soil = 
+    /* color: #13ff20 */
+    /* shown: false */
+    ee.Geometry.Polygon(
+        [[[-111.28409577650507, 42.27771399520493],
+          [-111.28068400663813, 42.27771399520493],
+          [-111.280662548966, 42.27822203723586],
+          [-111.28130627912958, 42.27822203723586],
+          [-111.28134919447382, 42.27874595129039],
+          [-111.2827868585058, 42.27873007517092],
+          [-111.28282977385004, 42.27980964218318],
+          [-111.28353787702997, 42.27980964218318],
+          [-111.28351641935785, 42.27876182740586],
+          [-111.28418160719355, 42.27874595129039]]]),
+    veg = 
+    /* color: #0c8b36 */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.Polygon(
+        [[[-111.25843867479216, 42.20350833749494],
+          [-111.25843867479216, 42.201489632685615],
+          [-111.2539969366635, 42.201489632685615],
+          [-111.2539969366635, 42.20350833749494]]], null, false);
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+//=== helper functions =====================================================
+
+var cloudMask = function(image){
+  var quality =image.select(['pixel_qa']);
+  // clear = no clouds, cloud shadow, or snow
+  var clear = quality.bitwiseAnd(8).eq(0) // cloud shadow
+                .and(quality.bitwiseAnd(32).eq(0)) // cloud
+                .and(quality.bitwiseAnd(16).eq(0)); // snow
+  image = image.mask(clear);
+  return image;
+};   
+
+var period = ee.ImageCollection("LANDSAT/LT05/C01/T1_SR")
+  .filterBounds(prjPoly.bounds()) //filter bounds to project area
+  .filter((ee.Filter.date('1984-01-01', '1987-12-31'))) //change range of years here
+    .map(cloudMask); //mask clouds
+    
+ var periodMean = period.filter(ee.Filter.dayOfYear(92, 200)).select('B1', 'B2', 'B3', 'B4', 'B5', 'B7').mean();
+ 
+Map.addLayer (periodMean.clip(prjPoly),{'min': 702, 'max': 3817, 'bands': ['B4', 'B3', 'B2']}, 'periodMean');
+
+
+// === spectral endmember generation =============================================
+
+//SOIL
+var endmemSoil = periodMean.reduceRegion({ 
+  reducer: ee.Reducer.mean(),
+  geometry: soil, // <--- create geometry to capture soil endmembers
+  scale: 30,
+}).values();
+print(endmemSoil, 'endmemSoil'); // <--- print soil endmembers for debugging
+
+//VEG
+var endmemVeg = periodMean.reduceRegion({ 
+  reducer: ee.Reducer.mean(),
+  geometry: veg, // 
+  scale: 30,
+}).values();
+print(endmemVeg, 'endmemVeg'); // 
+
+//WATER
+var endmemWater = periodMean.reduceRegion({ 
+  reducer: ee.Reducer.mean(),
+  geometry: water, 
+  scale: 30,
+}).values();
+print(endmemWater, 'endmemWater');
+
+
+// spectral mixture analysis - SMA
+var unmixed = periodMean.unmix([endmemSoil, endmemVeg, endmemWater], true, true); // <--- run SMA (soil, veg, water (R, G, B) order is why output class colors are red for soil, green for veg, and blue for water)
+// var unmixed = unmixed.select([0,1,2],['soil','veg','water']); // // rename endmemSoil to soil, endmemVeg to veg, endmemWater to water
+print(unmixed, 'unmixed');
+Map.addLayer(unmixed.clip(prjPoly), null, 'unmixed'); // <--- add SMA results to map
+
+
+// // visualize unmixed veg as % veg/pixel ++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+var unmixedVeg = unmixed.select([1]).clip(prjPoly);
+
+var vegVis = {
+  min:0.1,
+  max:1,
+  palette: ['green', 'green']
+};
+
+Map.addLayer({
+  eeObject:unmixedVeg.updateMask(unmixedVeg.divide(1)), // mask with itself to create a proportional mask that is output as an individual object so you can see %cover of one particular covertype in every pixel.
+  name:'veg',
+  visParams: vegVis
+});
+

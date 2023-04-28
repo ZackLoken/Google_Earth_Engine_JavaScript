@@ -1,0 +1,35 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var region = 
+    /* color: #00ffff */
+    /* shown: false */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.Polygon(
+        [[[-119.57793970512412, 43.560842425507694],
+          [-119.57793970512412, 42.99696690219597],
+          [-118.17168970512412, 42.99696690219597],
+          [-118.17168970512412, 43.560842425507694]]], null, false);
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+
+
+
+var myCollection = ee.ImageCollection('LANDSAT/LC08/C01/T1_SR')
+  .filterBounds(region)
+  .filter((ee.Filter.date('2013-01-01', '2015-12-31')))
+  .filter(ee.Filter.dayOfYear(91,212));
+
+print(myCollection, 'myCollection');
+
+var median = myCollection.median();
+var mean = myCollection.mean();
+
+
+// Map.addLayer (median.clip(region),null, 'median');
+Map.addLayer (median.clip(region), {'min': 670, 'max': 3062, 'bands': ['B5', 'B4', 'B3']}, 'median');
+
+
+Map.addLayer (mean.clip(region), {'min': 670, 'max': 3062, 'bands': ['B5', 'B4', 'B3']}, 'mean');
+

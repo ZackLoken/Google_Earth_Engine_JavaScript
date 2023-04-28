@@ -1,0 +1,45 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var region = 
+    /* color: #98ff00 */
+    /* shown: false */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.Polygon(
+        [[[-119.26810716687042, 43.60779914485466],
+          [-119.26810716687042, 42.99214973379302],
+          [-118.26560472546417, 42.99214973379302],
+          [-118.26560472546417, 43.60779914485466]]], null, false);
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+
+//=== helper functions =====================================================
+var cloudMask = function(image){
+  var quality =image.select(['pixel_qa']);
+  // clear = no clouds, cloud shadow, or snow
+  var clear = quality.bitwiseAnd(8).eq(0) // cloud shadow
+                .and(quality.bitwiseAnd(32).eq(0)) // cloud
+                .and(quality.bitwiseAnd(16).eq(0)); // snow
+  image = image.mask(clear);
+  return image;
+}; 
+
+
+var myCollection = ee.ImageCollection('LANDSAT/LT05/C01/T1_SR')
+  .filterBounds(region)
+  .filter((ee.Filter.date('1984-01-01', '1991-12-31')))
+  .filter(ee.Filter.dayOfYear(92,213))
+  .map(cloudMask); // map cloudMask over the entire ImageCollection
+
+print(myCollection, 'myCollection'); 
+
+var median = myCollection.median();
+var mean = myCollection.mean();
+
+
+// Map.addLayer (median.clip(region),null, 'median');
+Map.addLayer (median.clip(region), {'min': 670, 'max': 3062, 'bands': ['B4', 'B3', 'B2']}, 'median');
+
+
+Map.addLayer (mean.clip(region), {'min': 670, 'max': 3062, 'bands': ['B4', 'B3', 'B2']}, 'mean');

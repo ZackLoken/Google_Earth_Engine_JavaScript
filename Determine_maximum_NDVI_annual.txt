@@ -1,0 +1,91 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var AOI = 
+    /* color: #d63000 */
+    /* shown: false */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.Polygon(
+        [[[-117.20938027097264, 41.624483241990745],
+          [-117.20938027097264, 40.98488095841291],
+          [-116.41287148191014, 40.98488095841291],
+          [-116.41287148191014, 41.624483241990745]]], null, false);
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+// linking time to ecological applications -- this has a wide variety of uses
+
+//=== helper functions =====================================================
+
+
+var cloudMask = function(image){
+  var quality =image.select(['pixel_qa']); 
+  // clear = no clouds, coud shadow, or snow
+  var clear = quality.bitwiseAnd(8).eq(0) // cloud shadow
+                .and(quality.bitwiseAnd(32).eq(0)) // cloud
+                .and(quality.bitwiseAnd(16).eq(0)); // snow
+  image = image.mask(clear);
+  return image;
+};
+
+var addBands = function(image) {
+  var date = image.date();
+  var doy = date.getRelative('day', 'year');
+  
+  return image
+    .set({doy:doy})
+    .select('B3','B4','B5')
+    // NDVI
+    .addBands(image.normalizedDifference(['B5', 'B4']));
+    // time
+    // .addBands(image.metadata('system:time_start'));
+};
+
+var addDoy = function(image){
+  return image
+  .addBands(image.metadata('doy'));
+}
+
+var rapCover = function(image){ // <-- extract annual cover >= 40% from rap imageCollection
+  var cover = image.select('AFGC');
+  var annualMask = cover.updateMask(cover.gte(40));
+  return annualMask;
+};
+
+//============================================================================
+//    filter imageCollection and apply functions
+//============================================================================
+
+var collection = ee.ImageCollection("LANDSAT/LC08/C01/T1_SR")
+  .filterDate('2018-01-01', '2019-12-31')
+  .filterBounds(AOI)
+  .map(cloudMask)
+  .map(addBands)
+  .map(addDoy);
+
+//============================================================================
+//   check results
+//============================================================================ 
+  
+print(collection, 'collection');
+var img = collection.median();
+Map.addLayer(img.clip(AOI), {'min': 335, 'max': 4188, 'bands': ['B5', 'B4', 'B3']}, 'img');
+
+
+
+var ndviMaxDate = collection.qualityMosaic('nd');
+print(ndviMaxDate, 'ndviMaxDate');
+
+var rapCollection = ee.ImageCollection('projects/rangeland-analysis-platform/vegetation-cover-v2');
+print(rapCollection, 'rapCollection');
+
+var   annualCover = rapCollection
+  .map(rapCover)
+  .filter(ee.Filter.eq('year', 2019)).first(); // <-- just grab the image from 2019
+ 
+// Map.addLayer (ee.Image(annualCover).clip(AOI), null, 'annualGTE40');
+
+var annualMaxDate = ndviMaxDate.select('doy').mask(annualCover);
+
+Map.addLayer (annualMaxDate.clip(AOI), {min: 1, max: 365, palette:['#f0280a','#fffb00', '#11cf27']}, 'annualMaxDate'); 
+ 

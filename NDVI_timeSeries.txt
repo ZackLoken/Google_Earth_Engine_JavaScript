@@ -1,0 +1,128 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var lekBuf = ee.FeatureCollection("users/4932539/lekBuf5k");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+
+Map.addLayer(ee.Image().paint(lekBuf, 1, 3), null, 'region'); //removes the transparency of imported feature collections
+
+//=== helper functions =====================================================
+var bandRenamel8 = function(image){
+  var rename = image.select(['B2', 'B3', 'B4', 'B5', 'B6', 'B7'],
+  ['B1', 'B2', 'B3', 'B4', 'B5', 'B7']);
+  return rename;
+};
+
+var cloudMask = function(image){
+  var quality =image.select(['pixel_qa']);
+  // clear = no clouds, cloud shadow, or snow
+  var clear = quality.bitwiseAnd(8).eq(0) // cloud shadow
+                .and(quality.bitwiseAnd(32).eq(0)) // cloud
+                .and(quality.bitwiseAnd(16).eq(0)); // snow
+  image = image.mask(clear);
+  return image;
+}; 
+
+var ndviCalc = function(x) {
+  var ndvi = x.normalizedDifference(['B4', 'B3']); // shortcut for normalized difference equation; use NIR and Red bands to do NDVI. Can be done with other bands for other ND indices. 
+  ndvi = ndvi.select([0], ['ndvi']); // grabs all images named 0 and renames them ndvi
+  var imageDate = x.get('system:time_start'); // gets metadata for system:time_start (when the image was born) & adds it to image properties as imageDate
+  return ndvi.set('system:time_start', imageDate);
+};
+
+//============================================================================
+//    create imageCollection - filter landsat l5, l7, l8, and merge 
+//============================================================================
+
+var periodl5 = ee.ImageCollection('LANDSAT/LT05/C01/T1_SR')
+  .filterBounds(lekBuf.geometry().bounds()) 
+  .filter((ee.Filter.date('1984-01-01', '2011-12-31')))
+  .map(cloudMask);
+// print(periodl5, 'periodl5');
+
+var periodl7 = ee.ImageCollection('LANDSAT/LE07/C01/T1_SR')
+  .filterBounds(lekBuf.geometry().bounds()) 
+  .filter((ee.Filter.date('2012-01-01', '2012-12-31')))
+  .map(cloudMask);
+// print(periodl7, 'periodl7');
+
+var periodl8 = ee.ImageCollection('LANDSAT/LC08/C01/T1_SR')
+  .filterBounds(lekBuf.geometry().bounds()) 
+  .filter((ee.Filter.date('2013-01-01', '2019-12-31')))
+  .map(cloudMask)
+  .map(bandRenamel8);
+// print(periodl8, 'periodl8');
+
+var period = ee.ImageCollection(periodl5.merge(periodl7).merge(periodl8)); 
+// print (period.limit(1),'period');
+
+//============================================================================
+//    generate annual ndvi within buffered leks 1984-2019
+//============================================================================
+
+// define years of interest
+var startYear = 1984;
+var endYear = 2019;
+
+var ndvi = ee.ImageCollection(period)
+  .filterDate(startYear.toString(), (endYear +1).toString()) // equivalent to this.filter(ee.Filter.date(...))
+  .filter(ee.Filter.dayOfYear(196,273))
+  .select(['B3','B4'])
+  .map(ndviCalc);
+
+print(ndvi.limit(10),'ndviCollection');
+
+var years = ee.List.sequence(startYear, endYear); 
+print(years, 'years');
+
+// // this renames your image to its corresponding year so when you output to CSV it is easy to tell what year each mean NDVI value is from
+var ndviAnnual = ee.ImageCollection.fromImages(years.map(function(x){ 
+  var yearCollection = ndvi
+  .filter(ee.Filter.calendarRange(x, x, 'year'));
+  var date = ee.Date(yearCollection
+  .first()
+  .get('system:time_start'))
+  .format('YYYY');
+  var yearNDVI = yearCollection
+  .max()
+  .select([0], [ee.String('').cat(date)])
+  .set({year:x});
+  return yearNDVI;
+}));
+
+print(ndviAnnual, 'ndviAnual');
+
+
+//============================================================================
+//    reduce and export annual mean max NDVI within buffered leks
+//============================================================================
+
+var ndviAnnualImg = ee.ImageCollection(ndviAnnual.iterate( 
+  function (image, previous) {
+    return ee.Image(previous).addBands(image);
+  },
+  ee.Image([]))); // <----- what's the bracket inside a parentheses do?????
+  
+print(ndviAnnualImg,'ndviAnnualImg');
+  
+var ndviReduced = ee.Image(ndviAnnualImg) //<--- sum area esimates by regions for each year
+    .reduceRegions({
+      collection: lekBuf,
+      reducer: ee.Reducer.mean(),
+      scale: 30,
+      crs: 'EPSG:4326', // make it a habitat to always apply a projection during NDVI reduction
+      tileScale: 5 //<--- change tile scale if memory errors occur (range 1 (small processes) to 16 (very large processes))
+    });
+    
+var ndviNoGeo = ndviReduced.map(function(feature) {   // <- remove geometry for export
+      return ee.Feature(feature.select([".*"], null, false));
+    });   
+
+// print(wetAreaImgnoGeo.limit(1),'wetAreaImgnoGeo');
+
+Export.table.toDrive({
+  folder: 'seminarGEE', // <-- change destination folder name here
+  collection: ndviNoGeo,
+  description:'lateBroodNDVI', // <-- change file name here
+  fileFormat: 'CSV'
+}); 
+  
+//  // TRY TO INTERPRET WHAT IS GOING ON IN THIS CODE AFTER LINE 24

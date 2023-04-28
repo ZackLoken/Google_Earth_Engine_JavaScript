@@ -1,0 +1,52 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var region = ee.FeatureCollection("users/zackloken/Missouri_StateBoundary_WGS84");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+/*Uses TerraClimate to sum climate variable annually and calc mean within a region(s) as a time series over water years (OCT 1 to SEP 30). 
+Returns a *.csv table.*/
+
+Map.addLayer(ee.Image().paint(region, 1, 3), null, 'region'); // check geometery of ecoHYDRO
+
+
+
+//Create a sum climate imageCollection for each water year (1984-2020) using daily GRIDMET data
+var climateYear =  ee.ImageCollection(ee.List.sequence(1984, 2019).map(function (x){
+  //Load Terrclimate and filter by year and location
+  var date_start = ee.Date.fromYMD(x, 10, 1);
+  var date_end = date_start.advance(1, "year");
+  return  ee.ImageCollection('IDAHO_EPSCOR/TERRACLIMATE')
+                        .select(['ro','swe','pr','pet']) // <--- change summary band here
+                        .filterDate(date_start, date_end)
+                        .filterBounds(region.geometry().bounds())
+                        .sum() // <--- change summary function here
+                        .set({'year': x, 'system:time_start':date_start});
+}));
+print(climateYear, 'climateYear');
+
+var climImg = climateYear.filter(ee.Filter.eq('year', 2000)).first();
+
+Map.addLayer(climImg.select('pr').clip(region),null,'climImg');
+
+var climateYearMean = climateYear.map(function(x) {
+  return x.reduceRegions({
+    collection: region,
+    reducer: ee.Reducer.mean(), // change reducer for different summary outputs **************************
+    scale: 4000,
+    crs: 'EPSG:4326',
+    tileScale: 1
+  }).map(function(y){return y.set({'year': x.get('year')})});
+  }); 
+print(climateYearMean, 'climateYEARmean');
+
+var climateMean = (ee.FeatureCollection(climateYearMean).flatten());
+print(climateMean, 'climateMeanFlat');
+
+var climateNoGeo = climateMean.map(function(feature) {
+return ee.Feature(feature.select([".*"], null, false));
+});
+
+Export.table.toDrive({
+  folder: 'seminarGEEspring2021',
+  collection: climateNoGeo,
+  description:'climYear',
+  fileFormat: 'CSV'
+}); 

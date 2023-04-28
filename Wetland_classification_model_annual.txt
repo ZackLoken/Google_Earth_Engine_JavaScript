@@ -1,0 +1,397 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var footprint = 
+    /* color: #d63000 */
+    /* shown: false */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.Polygon(
+        [[[-119.87209074664268, 43.81421132135745],
+          [-119.87209074664268, 42.659712156444435],
+          [-117.95085661578331, 42.659712156444435],
+          [-117.95085661578331, 43.81421132135745]]], null, false),
+    upland = 
+    /* color: #98ff00 */
+    /* shown: false */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      },
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.MultiPolygon(
+        [[[[-121.0123316478309, 41.12231942469562],
+           [-121.0123316478309, 41.121357646551715],
+           [-121.01092080588907, 41.121357646551715],
+           [-121.01092080588907, 41.12231942469562]]],
+         [[[-118.71586096743295, 43.23053907737269],
+           [-118.71586096743295, 43.208522235456684],
+           [-118.68427527407357, 43.208522235456684],
+           [-118.68427527407357, 43.23053907737269]]]], null, false),
+    shrub = 
+    /* color: #0b4a8b */
+    /* shown: false */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      },
+      {
+        "type": "rectangle"
+      },
+      {
+        "type": "rectangle"
+      },
+      {
+        "type": "rectangle"
+      },
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.MultiPolygon(
+        [[[[-121.00178345855706, 41.117956429303334],
+           [-121.00178345855706, 41.117067332074576],
+           [-121.00054427799218, 41.117067332074576],
+           [-121.00054427799218, 41.117956429303334]]],
+         [[[-120.98717402874541, 41.10594457955381],
+           [-120.98717402874541, 41.10458643229062],
+           [-120.98485660015655, 41.10458643229062],
+           [-120.98485660015655, 41.10594457955381]]],
+         [[[-119.28691660012463, 43.63058389766477],
+           [-119.28691660012463, 43.63044411723032],
+           [-119.28677176083782, 43.63044411723032],
+           [-119.28677176083782, 43.63058389766477]]],
+         [[[-119.14657650861565, 43.62854095697306],
+           [-119.14657650861565, 43.62782649594205],
+           [-119.14554654035393, 43.62782649594205],
+           [-119.14554654035393, 43.62854095697306]]],
+         [[[-119.1703945246679, 43.625123892616706],
+           [-119.1703945246679, 43.62447152188511],
+           [-119.16945038709466, 43.62447152188511],
+           [-119.16945038709466, 43.625123892616706]]]], null, false),
+    soil = 
+    /* color: #ffc82d */
+    /* shown: false */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      },
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.MultiPolygon(
+        [[[[-121.36907548660434, 41.11576483176624],
+           [-121.36907548660434, 41.11091490229264],
+           [-121.36100740188755, 41.11091490229264],
+           [-121.36100740188755, 41.11576483176624]]],
+         [[[-118.60371795009523, 43.550513947676045],
+           [-118.60371795009523, 43.549938527693],
+           [-118.6029025585547, 43.549938527693],
+           [-118.6029025585547, 43.550513947676045]]]], null, false),
+    wet = ee.FeatureCollection("users/4932539/wetHarneyBasin");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+var wetPoly = ee.Image().paint(wet).add(1);
+Map.addLayer(wetPoly, null, 'wetPoly');
+
+//=== helper functions =====================================================
+
+var bandRenamel8 = function(image){
+  var rename = image.select(['B2', 'B3', 'B4', 'B5', 'B6', 'B7'],
+  ['B1', 'B2', 'B3', 'B4', 'B5', 'B7']); 
+  return rename; 
+};
+var cloudMask = function(image){
+  var quality =image.select(['pixel_qa']); 
+  // clear = no clouds, coud shadow, or snow
+  var clear = quality.bitwiseAnd(8).eq(0) // cloud shadow
+                .and(quality.bitwiseAnd(32).eq(0)) // cloud
+                .and(quality.bitwiseAnd(16).eq(0)); // snow
+  image = image.mask(clear);
+  return image;
+};  
+
+var maskCollectionNDVI = function(image){
+  var mask = image.select('ndvi');
+  return image.select('B1', 'B2', 'B3', 'B4', 'B5', 'B7').mask(mask);
+};
+var maskCollectionNDWI = function(image){
+  var mask = image.select('ndwi');
+  return image.select('B1', 'B2', 'B3', 'B4', 'B5', 'B7').mask(mask);
+};
+var addTime = function(image) {
+  return image.addBands(image.metadata('year'));
+};
+
+//============================================================================
+//    create imageCollection - filter landsat l5, l7, l8, and merge 
+//============================================================================
+{
+var periodl5 = ee.ImageCollection('LANDSAT/LT05/C01/T1_SR')
+    .filterBounds(wetPoly.geometry()) 
+  .filter((ee.Filter.date('1984-01-01', '2011-12-31')))
+  .map(cloudMask);
+// print(periodl5, 'periodl5');
+
+var periodl7 = ee.ImageCollection('LANDSAT/LE07/C01/T1_SR')
+    .filterBounds(wetPoly.geometry()) 
+  .filter((ee.Filter.date('2012-01-01', '2012-12-31')))
+  .map(cloudMask);
+// print(periodl7, 'periodl7');
+
+var periodl8 = ee.ImageCollection('LANDSAT/LC08/C01/T1_SR')
+    .filterBounds(wetPoly.geometry()) 
+  .filter((ee.Filter.date('2013-01-01', '2019-12-31')))
+  .map(cloudMask)
+  .map(bandRenamel8);
+//print(periodl8, 'periodl8');
+
+var period = ee.ImageCollection(periodl5.merge(periodl7).merge(periodl8)); 
+// print (period);
+}
+//============================================================================
+//    filter collection into annual-seasonal means
+//============================================================================
+{
+var wetYear =  ee.ImageCollection(ee.List.sequence(1984, 2019).map(function (year){
+  var date_start = ee.Date.fromYMD(year, 3, 1); // <--- chanage start date here
+  var date_end = date_start.advance(120, "day"); // <--- change period length in days here
+  return  ee.ImageCollection(period)
+                        .select('B1', 'B2', 'B3', 'B4', 'B5', 'B7') 
+                        .filterDate(date_start, date_end)
+                        .median()
+                        .set({year: year, 'system:time_start': date_start});
+}));
+
+print(wetYear, 'wetYear');
+
+// var wetImg = (wetYear.filterMetadata('year','equals',2004)).first(); // <--- view individual years
+// print(wetImg, 'wetImg');
+// Map.addLayer (ee.Image(wetImg).clip(wetPoly), {'min': 335, 'max': 4188, 'bands': ['B4', 'B3', 'B2']}, 'wetImg');
+}
+//============================================================================
+//    generate endmembers 
+//============================================================================
+{
+//=== upland ================================================================
+var uplandList = wetYear.map(function(image) {
+  return image.reduceRegions({
+    collection: upland,
+    reducer: ee.Reducer.mean(),
+    scale: 30
+  });
+});
+
+var uplandList = ee.FeatureCollection(uplandList).flatten()
+.map(function (feature) {
+    return ee.Feature(null, {dict: feature.toDictionary()});
+  }).aggregate_array('dict');
+print(uplandList, 'uplandListObj');
+  
+var uplandList =  ee.List(ee.List.sequence(0,35).map(function(object){
+  var endmemUpland = ee.Dictionary(ee.List(uplandList).get(object)).values();
+  return ee.List(endmemUpland);
+}));
+
+print(uplandList,'uplandList'); 
+
+//=== shrub ================================================================
+var shrubList = wetYear.map(function(image) {
+  return image.reduceRegions({
+    collection: shrub,
+    reducer: ee.Reducer.mean(),
+    scale: 30
+  });
+});
+
+var shrubList = ee.FeatureCollection(shrubList).flatten()
+.map(function (feature) {
+    return ee.Feature(null, {dict: feature.toDictionary()});
+  }).aggregate_array('dict');
+  
+var shrubList =  ee.List(ee.List.sequence(0,35).map(function(object){
+  var endmemShrub = ee.Dictionary(ee.List(shrubList).get(object)).values();
+  return ee.List(endmemShrub);
+}));
+
+print(shrubList,'shrubList');
+
+//=== soil =================================================================
+var soilList = wetYear.map(function(image) {
+  return image.reduceRegions({
+    collection: soil,
+    reducer: ee.Reducer.mean(),
+    scale: 30
+  });
+});
+
+var soilList = ee.FeatureCollection(soilList).flatten()
+.map(function (feature) {
+    return ee.Feature(null, {dict: feature.toDictionary()});
+  }).aggregate_array('dict');
+
+var soilList =  ee.List(ee.List.sequence(0,35).map(function(object){
+  var endmemSoil = ee.Dictionary(ee.List(soilList).get(object)).values();
+  return ee.List(endmemSoil);
+}));
+
+print(soilList,'soilList');
+
+//=== ndvi =================================================================
+var list1 = [
+  ee.List([0.7]),ee.List([0.7]),ee.List([0.7]),ee.List([0.7]),ee.List([0.7]),
+  ee.List([0.7]),ee.List([0.7]),ee.List([0.7]),ee.List([0.7]),ee.List([0.7]),
+  ee.List([0.7]),ee.List([0.7]),ee.List([0.7]),ee.List([0.7]),ee.List([0.7]),
+  ee.List([0.7]),ee.List([0.7]),ee.List([0.7]),ee.List([0.7]),ee.List([0.7]),
+  ee.List([0.7]),ee.List([0.7]),ee.List([0.7]),ee.List([0.7]),ee.List([0.7]),
+  ee.List([0.7]),ee.List([0.7]),ee.List([0.7]),ee.List([0.7]),ee.List([0.7]),
+  ee.List([0.7]),ee.List([0.7]),ee.List([0.7]),ee.List([0.7]),ee.List([0.7]),
+  ee.List([0.7])
+  ];
+var ndviThld = ee.List(list1);
+print(ndviThld,'ndviThld')
+
+var listDemo = ee.List.sequence(0,35)
+print(listDemo, 'list')
+
+var ndviMask = ee.ImageCollection(ee.List.sequence(0,35).getInfo().map(function(object){
+  var year = 1984 + object;
+  var img = ee.Image(wetYear.filter(ee.Filter.rangeContains('year',year,year+1)).first());
+  var ndvi = ee.Image(img.normalizedDifference(['B4', 'B3']));
+  ndvi = ndvi.select([0], ['ndvi']).updateMask(wetPoly);
+  var ndviGTE = ndviThld.get(object);
+
+  return ee.Image(img).addBands(ndvi).updateMask(ndvi.gte(ee.Number(ndviGTE)));
+}));
+
+// Map.addLayer(ndviMask.filterMetadata('year','equals',2004).select([6]),{palette: '00FF00'},'NDVI mask');
+
+print(ndviMask, 'ndviMask');
+
+var ndviMask = ndviMask.map(maskCollectionNDVI);
+//print(ndviMask,'ndviMask');
+
+
+var ndviList = ndviMask.map(function(image){
+  return image.reduceRegions({
+    reducer: ee.Reducer.mean(),
+    collection: footprint,
+    scale: 30
+  });
+});
+
+var ndviList = ee.FeatureCollection(ndviList).flatten()
+.map(function (feature) {
+    return ee.Feature(null, {dict: feature.toDictionary()});
+  }).aggregate_array('dict');
+
+var ndviList = ee.List(ee.List.sequence(0,35).map(function(object){
+  var endmemNDVI = ee.Dictionary(ee.List(ndviList).get(object)).values();
+  return ee.List(endmemNDVI);
+}));
+
+print(ndviList, 'ndviList');
+
+//=== ndwi =================================================================
+var list2 = [
+  ee.List([0.6]),ee.List([0.8]),ee.List([0.8]),ee.List([0.8]),ee.List([0.8]),
+  ee.List([0.8]),ee.List([0.8]),ee.List([0.8]),ee.List([0.7]),ee.List([0.8]),
+  ee.List([0.8]),ee.List([0.8]),ee.List([0.8]),ee.List([0.8]),ee.List([0.8]),
+  ee.List([0.8]),ee.List([0.8]),ee.List([0.8]),ee.List([0.8]),ee.List([0.8]),
+  ee.List([0.7]),ee.List([0.8]),ee.List([0.8]),ee.List([0.8]),ee.List([0.8]),
+  ee.List([0.8]),ee.List([0.8]),ee.List([0.8]),ee.List([0.8]),ee.List([0.8]),
+  ee.List([0.8]),ee.List([0.8]),ee.List([0.8]),ee.List([0.8]),ee.List([0.8]),
+  ee.List([0.8])
+  ];
+
+var ndwiThld = ee.List(list2);
+
+var ndwiMask = ee.ImageCollection(ee.List.sequence(0,35).getInfo().map(function(object){
+ 
+  var year = 1984 + object;
+  var img = ee.Image(wetYear.filter(ee.Filter.rangeContains('year',year,year+1)).first());
+  var ndwi = ee.Image(img.normalizedDifference(['B3', 'B5']));
+  ndwi = ndwi.select([0], ['ndwi']).updateMask(wetPoly);
+  var ndwiGTE = ndwiThld.get(object);
+
+  return ee.Image(img).addBands(ndwi).updateMask(ndwi.gte(ee.Number(ndwiGTE)));
+}));
+
+// Map.addLayer(ndwiMask.filterMetadata('year','equals',1984).select([6]),{palette: '00FF00'},'NDWI mask');
+
+
+var ndwiMask = ndwiMask.map(maskCollectionNDWI);
+print(ndwiMask,'ndwiMask');
+
+
+var ndwiList = ndwiMask.map(function(image){
+  return image.reduceRegions({
+    reducer: ee.Reducer.mean(),
+    collection: footprint,
+    scale: 30
+  });
+});
+
+var ndwiList = ee.FeatureCollection(ndwiList).flatten()
+.map(function (feature) {
+    return ee.Feature(null, {dict: feature.toDictionary()});
+  }).aggregate_array('dict');
+
+var ndwiList = ee.List(ee.List.sequence(0,35).map(function(object){
+  var endmemNDWI = ee.Dictionary(ee.List(ndwiList).get(object)).values();
+  return ee.List(endmemNDWI);
+}));
+
+print(ndwiList, 'ndwiList');
+}
+
+//============================================================================
+//    unmix collection - classify water 
+//============================================================================
+{
+var wetUnmix =  ee.ImageCollection(ee.List.sequence(0,35).getInfo().map(function(object){
+  var year = 1984 + object;
+  var img = ee.Image(wetYear.filterDate(year.toString(), (year+1).toString()).first());
+
+  var endmemUpland = ee.List(uplandList).get(object);
+  var endmemNDVI   = ee.List(ndviList).get(object);
+  var endmemNDWI   = ee.List(ndwiList).get(object);
+  var endmemShrub  = ee.List(shrubList).get(object);
+  var endmemSoil   = ee.List(soilList).get(object);
+  
+  var sma = img.unmix([endmemUpland,endmemNDVI,endmemNDWI,endmemShrub,endmemSoil], true, true)
+                          .setMulti(['system:time_start',img.get('system:time_start')])
+                          .setMulti(['year',img.get('year')]);
+  return ee.Image(sma).updateMask(wetPoly);   
+  }));
+  
+print(wetUnmix,'wetUnmix');
+// var unmixed = (wetUnmix.filterMetadata('year','equals',2012)).mean();
+// print(unmixed, 'unmixed');
+// Map.addLayer (ee.Image(unmixed).clip(wetSHED),null,'unmixed');
+}
+
+//============================================================================
+//   visualize data
+//============================================================================
+{
+//=== visualize surface water ===================================================
+var watVis = {
+  min:0.2,
+  max:1,
+  palette: ['blue', 'blue']
+};
+
+var unmixWater = (wetUnmix.filterMetadata('year','equals',1987)).select('band_2').first();
+var unmixMask = unmixWater.updateMask(unmixWater).gte(0.20);
+var unmixWater = unmixWater.mask(unmixMask).updateMask(wetPoly);
+Map.addLayer({
+  eeObject:unmixWater.updateMask(unmixWater.divide(1)),
+  name:'wat',
+  visParams: watVis
+});
+}

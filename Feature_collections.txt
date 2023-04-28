@@ -1,0 +1,59 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var region = ee.FeatureCollection("users/4932539/wetHarneyBasin"),
+    studySite = 
+    /* color: #d63000 */
+    /* shown: false */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.Polygon(
+        [[[-119.75590418455678, 43.674095486535926],
+          [-119.75590418455678, 43.43723092004132],
+          [-119.33567713377553, 43.43723092004132],
+          [-119.33567713377553, 43.674095486535926]]], null, false);
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+
+Map.addLayer(region, null, 'fcExample'); 
+
+
+//=== helper functions =====================================================
+
+var cloudMask = function(x){
+  var quality = x.select(['pixel_qa']);
+  // clear = no clouds, coud shadow, or snow
+  var clear = quality.bitwiseAnd(8).eq(0) // cloud shadow
+                .and(quality.bitwiseAnd(32).eq(0)) // cloud
+                .and(quality.bitwiseAnd(16).eq(0)); // snow
+  x = x.mask(clear);
+  return x;
+}; 
+
+print(region.limit(1), 'region')
+
+//===  filter featureCollection ==============================================
+
+var region = region.filterMetadata('OWNER', 'equals','PRIVATE'); // deprecated; change to ee.Filter.gte() or ee.Filter.eq() instead
+var region = region.filterBounds(studySite);
+
+// // image compost =============================================================
+{
+var myCollection = ee.ImageCollection('LANDSAT/LT05/C01/T1_SR')
+  .filterBounds(region.geometry().bounds())
+  .filter((ee.Filter.date('1984-01-01', '1991-12-31')))
+  .filter(ee.Filter.dayOfYear(92,213))
+  .map(cloudMask);
+
+print(myCollection, 'myCollection'); 
+
+
+var mean = myCollection.mean();
+
+
+Map.addLayer (mean.clip(region), {'min': 670, 'max': 3062, 'bands': ['B4', 'B3', 'B2']}, 'mean');
+// clip is server intensive, try to avoid continuously clipping throughout the code. If necessaray, clip at the very end. Mask is an alternative that doesn't require the server to process anything.
+
+Map.addLayer(ee.Image().paint(region, 1, 3), null, 'region'); 
+
+}

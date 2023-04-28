@@ -1,0 +1,121 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var geometry = 
+    /* color: #d63000 */
+    /* shown: false */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.Polygon(
+        [[[-106.48628439655121, 38.13435788554474],
+          [-106.48628439655121, 37.17762432494862],
+          [-105.42061056842624, 37.17762432494862],
+          [-105.42061056842624, 38.13435788554474]]], null, false),
+    cranePt = ee.FeatureCollection("users/4932539/cranePt");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+
+print(cranePt.limit(10), 'cranePt');
+
+//============================================================================
+//   helper functions
+//============================================================================
+
+// masks and filters gain crops from NASS data
+var grainMask = function(image) {
+  var clip = image.clipToBoundsAndScale(cranePt);
+  var focal = clip.focal_mean(2,'circle','pixels',1);
+  var grain = focal.mask(image.lte(33).and(image.neq(2)).and(image.neq(3))
+                          .and(image.neq(11)).and(image.neq(14)));
+  var year = ee.Date(image
+  .get('system:time_start'))
+  .format('YYYY');
+  var imageDate = image.get('system:time_start');
+  grain = grain.select([0],[ee.String('').cat(year)])
+  .set({'year':year}) 
+  .set({'system:time_start':imageDate});
+    return(grain);
+};
+
+// creates imageCollection of annual distance surfaces using grain crop distrabution
+var grainDist = function(image){
+  var distance = image.unmask().distance(ee.Kernel.euclidean(5000,'meters'));
+  var year = ee.Date(image
+  .get('system:time_start'))
+  .format('YYYY');
+  distance = distance.select([0],[ee.String('').cat(year)])
+  return(distance)
+}
+
+//============================================================================
+//   filter NASS image
+//============================================================================
+var NASS = ee.ImageCollection("USDA/NASS/CDL")
+  .filterDate('2014-01-01', '2019-12-31') 
+.select('cropland');
+
+print(NASS, 'nass');
+
+//============================================================================
+//   map functions over collections
+//============================================================================
+// Map helper function over collection
+var craneGrain = NASS.map(grainMask); // filters grain to ImageCollection
+print(craneGrain, 'craneGrain');
+var craneDist = craneGrain.map(grainDist); // creates distance surface from grain field
+
+
+//============================================================================
+//   check results by visualizing parameters on individual images 
+//============================================================================
+var nassYear = ee.Image(NASS.filterMetadata('system:index','equals','2019').first()).clipToBoundsAndScale(cranePt);
+// print(nassYear, 'nassYear');
+// Map.addLayer(nassYear, null, 'nassYear');
+
+// var nassFocal = nassYear
+var nassFocal = nassYear.focal_mode(3,'circle','pixels',1);
+var grain = nassFocal.mask(nassFocal.lte(33).and(nassFocal.neq(2)).and(nassFocal.neq(3))
+                          .and(nassFocal.neq(11)).and(nassFocal.neq(14)));
+var viewDist = grain.unmask().distance(ee.Kernel.euclidean(5000,'meters'));
+
+
+
+Map.addLayer(viewDist, {min: 0, max: 2000, palette: ['yellow', 'red']}, 'distance');
+Map.addLayer(cranePt, {color:'green'}, 'cranePt'); // <--- display and check crane locations
+Map.addLayer(grain, null, 'grain');
+
+//============================================================================
+//    convert distanceGrain ImageCollection to image and reduce using cranePt
+//============================================================================
+
+var craneGrainDistImg = ee.ImageCollection(craneDist.iterate( // <-- convert each distance image a single band in multi band image
+  function (image, previous) {
+    return ee.Image(previous).addBands(image);
+  },
+  ee.Image([])));
+  
+print(craneGrainDistImg,'craneGrainDistImg');
+  
+var grainDistReduced = ee.Image(craneGrainDistImg) //<--- sum area esimates by regions for each year
+    .reduceRegions({
+      collection: cranePt,
+      reducer: ee.Reducer.mean(),
+      scale: 30,
+      crs: 'EPSG:4326',
+      tileScale: 10 //<--- change tile scale if memory errors occur
+    });
+    
+var grainDistReducedNoGeo = grainDistReduced.map(function(feature) {   // <- remove geometry for export
+      return ee.Feature(feature.select([".*"], null, false));
+    });   
+
+print(grainDistReducedNoGeo.limit(100),'grainDistReducedNoGeo');
+
+Export.table.toDrive({
+  folder: 'craneTableGEE', // <-- change destination folder name here
+  collection: grainDistReducedNoGeo,
+  description:'grainDistGEE', // <-- change file name here
+  fileFormat: 'CSV'
+}); 
+  
+// play around with this code snippet with your own polygon/area for class next week. Bring questions! 

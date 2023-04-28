@@ -1,0 +1,108 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var region = 
+    /* color: #d63000 */
+    /* shown: false */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.Polygon(
+        [[[-119.29037928529948, 43.487206136557056],
+          [-119.29037928529948, 43.007060080432026],
+          [-118.41147303529948, 43.007060080432026],
+          [-118.41147303529948, 43.487206136557056]]], null, false);
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+
+
+//=== helper functions =====================================================
+var cloudMask = function(image){
+  var quality =image.select(['pixel_qa']); 
+  // clear = no clouds, cloud shadow, or snow
+  var clear = quality.bitwiseAnd(8).eq(0) // cloud shadow
+                .and(quality.bitwiseAnd(32).eq(0)) // cloud
+                .and(quality.bitwiseAnd(16).eq(0)); // snow
+  image = image.mask(clear);
+  return image;
+};  
+
+var bandRenamel8 = function(image){
+  var rename = image.select(['B2', 'B3', 'B4', 'B5', 'B6', 'B7'],
+  ['B1', 'B2', 'B3', 'B4', 'B5', 'B7']); 
+  return rename; 
+};
+
+//============================================================================
+//    create imageCollection - filter landsat l5, l7, l8, and merge 
+//============================================================================
+{
+var periodl5 = ee.ImageCollection('LANDSAT/LT05/C01/T1_SR')
+    .filterBounds(region) 
+    .filter((ee.Filter.date('1984-01-01', '2011-12-31')))
+    .map(cloudMask);
+    // .map(imageBuff);
+// print(periodl5, 'periodl5');
+
+var periodl7 = ee.ImageCollection('LANDSAT/LE07/C01/T1_SR')
+    .filterBounds(region)  
+    .filter((ee.Filter.date('2012-01-01', '2012-12-31')))
+    .map(cloudMask);
+// print(periodl7, 'periodl7');
+
+var periodl8 = ee.ImageCollection('LANDSAT/LC08/C01/T1_SR')
+    .filterBounds(region) 
+    .filter((ee.Filter.date('2013-01-01', '2020-12-31')))
+    .map(cloudMask)
+    .map(bandRenamel8);
+//print(periodl8, 'periodl8');
+
+var period = ee.ImageCollection(periodl5.merge(periodl7).merge(periodl8));
+// print (period, 'period;); 
+
+} 
+
+//============================================================================
+//    filter merged collection 
+//============================================================================
+{
+var myCollection =  ee.ImageCollection(ee.List.sequence(1984, 2020).map(function (year){
+  var date_start = ee.Date.fromYMD(year, 4, 1); // <--- chanage start date here
+  var date_end = date_start.advance(140, "day"); // <--- change period length in days here; you can search functions (i.e., 'advance') under the docs tab on the upper left side of this screen. 
+  return  ee.ImageCollection(period)
+                        .select('B1', 'B2', 'B3', 'B4', 'B5', 'B7') 
+                        .filterDate(date_start, date_end) // shortcut for the .filter((ee.Filter.date()) function. They are equivalent. This can be found using the 'docs' tab on upper left side. 
+                        .median()
+                        .set({'year': year, 'date': date_start}); // grabs metadata from your functions and adds to your image properties (expand ImageCollection under console, expand features, and then expand individual images to see properties)
+}));
+
+
+print (myCollection, 'myCollection');
+
+
+var myImg = myCollection.filter(ee.Filter.eq('year', 2010)).first();
+
+
+print(myImg, 'myImg'); 
+
+
+Map.addLayer (myImg.clip(region), {'min': 670, 'max': 3062, 'bands': ['B4', 'B3', 'B2']}, 'img');
+
+
+
+// Visulize all images in collection as filmstrip ++++++++++++++++++++++ // this will save you hours of time versus assessing images in ImageCollection 1 by 1. 
+var visArgs = {bands: ['B4', 'B3', 'B2'], min: 335, max: 4188};
+
+var visFun = function(img) {
+  return img.visualize(visArgs).copyProperties(img, img.propertyNames());
+};
+
+var wetVis = myCollection.map(visFun);
+// print(wetVis, 'wetVis');
+
+var filmArg = {
+  dimensions: 600,
+  region: region
+};
+
+print(wetVis.getFilmstripThumbURL(filmArg)); // <-- select URL to view 
+}

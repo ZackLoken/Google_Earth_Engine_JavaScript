@@ -1,0 +1,246 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var wetLand = ee.FeatureCollection("users/4932539/bearLake"),
+    region = 
+    /* color: #d63000 */
+    /* shown: false */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.Polygon(
+        [[[-111.57729159248856, 42.45649217813223],
+          [-111.57729159248856, 41.989707142398714],
+          [-111.10487948311356, 41.989707142398714],
+          [-111.10487948311356, 42.45649217813223]]], null, false),
+    upland = 
+    /* color: #ef46ff */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.Polygon(
+        [[[-111.28188700598685, 42.31710358845444],
+          [-111.28188700598685, 42.31383501489564],
+          [-111.27317519110647, 42.31383501489564],
+          [-111.27317519110647, 42.31710358845444]]], null, false);
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+//===========================================================
+// helper functions
+//===========================================================
+
+var cloudMask = function(image){
+  var quality =image.select(['pixel_qa']);
+  // clear = no clouds, coud shadow, or snow
+  var clear = quality.bitwiseAnd(8).eq(0) // cloud shadow
+                .and(quality.bitwiseAnd(32).eq(0)) // cloud
+                .and(quality.bitwiseAnd(16).eq(0)); // snow 
+  image = image.mask(clear);
+  return image;
+}; 
+
+
+var ndviCalc = function(image) {
+  var ndvi = image.normalizedDifference(['B4', 'B3']);
+  ndvi = ndvi.select([0], ['ndvi']);
+  return ndvi;
+};
+
+var ndwiCalc = function(image) {
+  var ndwi = image.normalizedDifference(['B2', 'B4']);
+  ndwi = ndwi.select([0], ['ndwi']);
+  return ndwi;
+};
+
+var bandRenamel8 = function(image){
+  var rename = image.select(['B2', 'B3', 'B4', 'B5', 'B6', 'B7'],
+  ['B1', 'B2', 'B3', 'B4', 'B5', 'B7']);
+  return rename;
+};
+
+//============================================================================
+//    create imageCollection - filter landsat l5, l7, l8, and merge 
+//============================================================================
+{
+var periodl5 = ee.ImageCollection('LANDSAT/LT05/C01/T1_SR')
+    .filterBounds(wetLand.geometry().bounds()) 
+  .filter((ee.Filter.date('1984-01-01', '2011-12-31')))
+  .map(cloudMask)
+// print(periodl5, 'periodl5');
+
+var periodl7 = ee.ImageCollection('LANDSAT/LE07/C01/T1_SR')
+    .filterBounds(wetLand.geometry().bounds()) 
+  .filter((ee.Filter.date('2012-01-01', '2012-12-31')))
+  .map(cloudMask);
+// print(periodl7, 'periodl7');
+
+var periodl8 = ee.ImageCollection('LANDSAT/LC08/C01/T1_SR')
+    .filterBounds(wetLand.geometry().bounds()) 
+  .filter((ee.Filter.date('2013-01-01', '2018-12-31')))
+  .map(cloudMask)
+  .map(bandRenamel8);
+print(periodl8, 'periodl8');
+
+var allLandsat = ee.ImageCollection(periodl5.merge(periodl7).merge(periodl8)); 
+// print (period);
+}
+  
+//===========================================================
+// filter landsat data
+//===========================================================  
+  
+var period = ee.ImageCollection(allLandsat)
+  .filterBounds(wetLand.geometry().bounds()) //filter bounds to project area
+  .filter((ee.Filter.date('1984-01-01', '1985-12-31')))//change range of years here
+   .filter(ee.Filter.dayOfYear(92,182));//change range of days here
+ 
+
+// convert imageCollection to mean image and slect bands 
+var periodMEAN = period.select('B1', 'B2', 'B3', 'B4', 'B5', 'B7').mean();
+
+//===========================================================
+// visulaize data
+//===========================================================  
+// Map.addLayer(periodMEAN.clip(region),null, 'periodMEAN' );
+Map.addLayer(periodMEAN.clip(region), {'min': 335, 'max': 4188, 'bands': ['B4', 'B3', 'B2']}, 'periodMEAN' ); // <-- image
+Map.addLayer(ee.Image().paint(wetLand, 1, 1.5), null, 'polygon'); // <-- polgons
+
+//===========================================================
+// dynamic NDVI endmember calculation (vegetation)
+//===========================================================  
+
+//calculate NDVI from jan mean reflectance 
+var imgNDVI = ndviCalc(periodMEAN).clip(wetLand); // will explain why wetLand clip is used here
+
+// //identify percentile NDVI pixel value within project area 
+var NDVIpctl = imgNDVI.reduceRegion({
+  reducer:ee.Reducer.percentile([98]), // adjust precentile threshold here
+  geometry: wetLand,
+  scale: 30
+});
+print(NDVIpctl, 'NDVIpctl');
+
+ 
+//generate mask of pixel values > percentile threshold and apply mask to original mean image
+var NDVIsel = imgNDVI.updateMask(imgNDVI.gte(0.62)); //from console copy NDVIpctl value here
+var NDVImask = periodMEAN.select('B1', 'B2', 'B3', 'B4', 'B5', 'B7').mask(NDVIsel);
+
+//generate veg endmembers by calculating mean of un-masked pixels (i.e. areas above percentile threshold) within study area boundary
+var NDVIendmem = NDVImask.reduceRegion({
+  reducer:ee.Reducer.mean(),
+  geometry: wetLand,
+  scale: 30
+}).values();
+print(NDVIendmem, 'NDVIendmembers');
+
+//review interim products to inform data quality as necessary
+Map.addLayer(imgNDVI.clip(wetLand), null, 'imgNDVI');//<-- NDVI image
+Map.addLayer(NDVIsel, {palette: '00FF00'}, 'NDVImask');//<-- 98th pctl NDVI image
+
+// //===========================================================
+// // dynamic NDWI endmember calculation (water)
+// //===========================================================  
+
+// //calculate NDWI from jan mean reflectance 
+// var imgNDWI = ndwiCalc(periodMEAN).clip(wetLand); // will explain why wetLand clip is used here
+
+// // //identify percentile NDWI pixel value within project area 
+// var NDWIpctl = imgNDWI.reduceRegion({
+//   reducer:ee.Reducer.percentile([99]), // adjust precentile threshold here
+//   geometry: wetLand,
+//   scale: 30
+// });
+// print(NDWIpctl, 'NDWIpctl');
+
+ 
+// //generate mask of pixel values > percentile threshold and apply mask to original mean image
+// var NDWIsel = imgNDWI.updateMask(imgNDWI.gte(0.58)); //from console copy NDWIpctl value here
+// var NDWImask = periodMEAN.select('B1', 'B2', 'B3', 'B4', 'B5', 'B7').mask(NDWIsel);
+
+// //generate veg endmembers by calculating mean of un-masked pixels (i.e. areas above percentile threshold) within study area boundary
+// var NDWIendmem = NDWImask.reduceRegion({
+//   reducer:ee.Reducer.mean(),
+//   geometry: wetLand,
+//   scale: 30
+// }).values();
+// print(NDWIendmem, 'NDWIendmembers');
+
+// //review interim products to inform data quality as necessary
+// Map.addLayer(imgNDWI.clip(wetLand), null, 'imgNDWI');//<-- NDWI image
+// Map.addLayer(NDWIsel, {palette: '00FF00'}, 'NDWImask');//<-- 99th pctl NDWI image
+
+// //===========================================================
+// // static Upland endmember calculation
+// //===========================================================  
+
+// var UPLANDendmem = periodMEAN.reduceRegion({
+//   reducer: ee.Reducer.mean(), 
+//   geometry: upland, //<-- must draw poly manually
+//   scale: 30
+// }).values();
+// print(UPLANDendmem, 'upland endmembers');
+
+// //===========================================================
+// //    unmix image using SMA 
+// //===========================================================  
+
+// var UNMIX = periodMEAN.unmix([UPLANDendmem, NDVIendmem, NDWIendmem], true, true).clip(wetLand);
+// Map.addLayer(UNMIX, null, 'UNMIX');
+// // print(UNMIX);
+
+// var waterMask = UNMIX.select([2]).gte(0.2); //<-- make a water mask for areas >20% water
+// var waterMask = waterMask.multiply(ee.Image.pixelArea()).divide(10000); //<-- turn pixel values to hectares to esimate area
+
+
+// var water = UNMIX.select([2]).mask(waterMask); //<-- retrieve just the water band for viewing and filter pixels <20% water with waterMask
+
+// //===========================================================
+// //    visualize just water
+// //===========================================================  
+// var watVis = {
+//   min:0.2,
+//   max:1,
+//   palette: ['blue', 'blue']
+// };
+
+// Map.addLayer({
+//   eeObject:water.updateMask(water.divide(1)),
+//   name:'water',
+//   visParams: watVis
+// });
+
+// //============================================================================
+// //    reduce and export surface water area data as table
+// //============================================================================
+
+// var wetReduced = ee.Image(waterMask)
+//     .reduceRegions({
+//       collection: wetLand,
+//       reducer: ee.Reducer.sum(),
+//       scale: 30,
+//       crs: 'EPSG:4326',
+//       tileScale: 1
+//     });
+    
+// var wetnoGeo = wetReduced.map(function(feature) {   // <- remove geometry for export
+//       return ee.Feature(feature.select([".*"], null, false));
+//     });   
+
+// Export.table.toDrive({
+//   folder: 'changeName!!!!', // <-- change destination folder name here
+//   collection: wetnoGeo,
+//   description:'changeName!!!!', // <-- change file name here
+//   fileFormat: 'CSV'
+// });
+
+
+
+
+
+
+
+
+
+
+
