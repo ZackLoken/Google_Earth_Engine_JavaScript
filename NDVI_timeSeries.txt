@@ -99,7 +99,7 @@ var ndviAnnualImg = ee.ImageCollection(ndviAnnual.iterate(
   function (image, previous) {
     return ee.Image(previous).addBands(image);
   },
-  ee.Image([]))); // <----- what's the bracket inside a parentheses do?????
+  ee.Image([]))); 
   
 print(ndviAnnualImg,'ndviAnnualImg');
   
