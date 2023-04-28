@@ -1,0 +1,506 @@
+// // SMA ANNUAL MODEL ALLOWS SUB-PIXEL EXAMINATION OF ANNUAL CONDITIONS OVER LONG PERIODS OF TIME WHEN USING LANDSAT IMAGERY
+// // COMPOSTING IMAGES OVER MULTIPLE MONTHS WITHIN A YEAR CAN FILL DATA GAPS CAUSED BY CLOUDS
+
+// // start of imports - if edited, may not convert properly in the playground ** 
+// {
+// var upland = 
+//     /* color: #0b4a8b */
+//     /* displayProperties: [
+//       {
+//         "type": "rectangle"
+//       },
+//       {
+//         "type": "rectangle"
+//       }
+//     ] */
+//     ee.Geometry.MultiPolygon(
+//         [[[[-92.52127344511258, 39.76555196695408],
+//           [-92.52127344511258, 39.7655344422564],
+//           [-92.52125198744046, 39.7655344422564],
+//           [-92.52125198744046, 39.76555196695408]]],
+//         [[[-93.30412792003419, 39.78999441072683],
+//           [-93.30412792003419, 39.78996555676577],
+//           [-93.30408634579446, 39.78996555676577],
+//           [-93.30408634579446, 39.78999441072683]]]], null, false),
+//     soil = 
+//     /* color: #00ffff */
+//     /* displayProperties: [
+//       {
+//         "type": "rectangle"
+//       },
+//       {
+//         "type": "rectangle"
+//       }
+//     ] */
+//     ee.Geometry.MultiPolygon(
+//         [[[[-93.28844448228986, 39.67811424581332],
+//           [-93.28844448228986, 39.67810598843394],
+//           [-93.2884324123493, 39.67810598843394],
+//           [-93.2884324123493, 39.67811424581332]]],
+//         [[[-92.52127671208139, 39.76526452521092],
+//           [-92.52127671208139, 39.76522947566471],
+//           [-92.52123513784166, 39.76522947566471],
+//           [-92.52123513784166, 39.76526452521092]]]], null, false),
+//     shrub = 
+//     /* color: #98ff00 */
+//     /* displayProperties: [
+//       {
+//         "type": "rectangle"
+//       },
+//       {
+//         "type": "rectangle"
+//       }
+//     ] */
+//     ee.Geometry.MultiPolygon(
+//         [[[[-93.24474577548196, 39.639606257899594],
+//           [-93.24474577548196, 39.63955668599649],
+//           [-93.2446814024656, 39.63955668599649],
+//           [-93.2446814024656, 39.639606257899594]]],
+//         [[[-93.24017422929727, 39.63459779107785],
+//           [-93.24017422929727, 39.63455647816968],
+//           [-93.240125949535, 39.63455647816968],
+//           [-93.240125949535, 39.63459779107785]]]], null, false),
+//     wetPoly = ee.FeatureCollection("users/zackloken/LGRW_NLCD_All_ExceptDeveloped_ParcelUnion"),
+//     footprint = 
+//     /* color: #f7f7f7 */
+//     /* displayProperties: [
+//       {
+//         "type": "rectangle"
+//       }
+//     ] */
+//     ee.Geometry.Polygon(
+//         [[[-93.42672382799955, 39.897155922877694],
+//           [-93.42672382799955, 39.46912692683144],
+//           [-93.1053737303433, 39.46912692683144],
+//           [-93.1053737303433, 39.897155922877694]]], null, false);
+// // end of imports - if edited, may not convert properly in the playground ** 
+// }
+
+Map.addLayer(ee.Image().paint(wetPoly, 1, 2), null, 'wetPoly'); // <--- display and check wetPoly
+
+// === helper functions =====================================================
+
+var bandRenamel8 = function(image){ // rename L8 bands to match L5 and L7 bands
+  var rename = image.select(['B2', 'B3', 'B4', 'B5', 'B6', 'B7'],
+  ['B1', 'B2', 'B3', 'B4', 'B5', 'B7']);
+  return rename;
+};
+
+var cloudMask = function(image){ // pixel quality attributes generated from the CFMASK algorithm -- bit 0 = fill
+  var quality = image.select(['pixel_qa']);
+  // clear = no clouds, cloud shadow, or snow
+  var clear = quality.bitwiseAnd(8).eq(0) // cloud shadow (bit 3)
+                .and(quality.bitwiseAnd(32).eq(0)) // cloud (bit 5)
+                .and(quality.bitwiseAnd(16).eq(0)); // snow (bit 4)
+  image = image.mask(clear);
+  return image;
+};  
+
+var maskCollectionNDVI = function(image){ // NDVI mask collection to be used later in calculating annual thresholds for automatic dynamic endmember generation
+  var mask = image.select('ndvi');
+  return image.select('B1', 'B2', 'B3', 'B4', 'B5', 'B7').mask(mask);
+};
+
+var maskCollectionNDWI = function(image){ // NDWI mask collection to be used later in calculating annual thresholds for automatic dynamic endmember generation
+  var mask = image.select('ndwi');
+  return image.select('B1', 'B2', 'B3', 'B4', 'B5', 'B7').mask(mask);
+};
+
+// ============================================================================
+//      create imageCollection - filter landsat l5, l7, l8, and merge 
+// ============================================================================
+{
+var periodl5 = ee.ImageCollection('LANDSAT/LT05/C01/T1_SR')
+    .filterBounds(wetPoly.geometry().bounds()) 
+  .filter((ee.Filter.date('1984-01-01', '2011-12-31'))) // specify dates of interest here to filter L5 collection
+  .map(cloudMask);
+// print(periodl5, 'periodl5');
+
+var periodl7 = ee.ImageCollection('LANDSAT/LE07/C01/T1_SR') // L7 images are only used to fill gap between L5 and L8; image quality issues w/ this satellite
+    .filterBounds(wetPoly.geometry().bounds()) 
+  .filter((ee.Filter.date('2012-01-01', '2012-12-31'))) // specify dates of interest here to filter L7 collection
+  .map(cloudMask);
+// print(periodl7, 'periodl7');
+
+var periodl8 = ee.ImageCollection('LANDSAT/LC08/C01/T1_SR')
+    .filterBounds(wetPoly.geometry().bounds()) 
+  .filter((ee.Filter.date('2013-01-01', '2020-12-31'))) // specify dates of interest here to filter L8 collection
+  .map(cloudMask)
+  .map(bandRenamel8);
+// print(periodl8, 'periodl8');
+
+var period = ee.ImageCollection(periodl5.merge(periodl7).merge(periodl8)); // merge L5, L7, and L8 image collections into one
+// print (period);
+}
+// ============================================================================
+//             filter collection into annual-seasonal means
+// ============================================================================
+{
+var wetYear =  ee.ImageCollection(ee.List.sequence(1984, 2020).map(function (year){ // change years of analysis to correspond with LandSat imagery years above
+  var date_start = ee.Date.fromYMD(year, 10, 1); // <--- change start date here (October 1) 
+  var date_end = date_start.advance(92, "day"); // <--- change period length in days here (end Dec. 31)
+  return  ee.ImageCollection(period)
+                        .select('B1', 'B2', 'B3', 'B4', 'B5', 'B7') // define bands to be included in the filtered image collection
+                        .filterDate(date_start, date_end)
+                        .median() // change image reducer here (use median unless there's a strong argument for means)
+                        .set({year: year, 'system:time_start': date_start}); // setting metadata so you can see year in image properties
+}));
+
+print(wetYear, 'wetYear'); // print wetYear to console to see imageCollection properties
+
+var wetImg = (wetYear.filterMetadata('year','equals',2015)).first(); // change year here to decide what year's filtered image is added to map
+
+// print(wetImg, 'wetImg');
+
+Map.addLayer (ee.Image(wetImg).clip(footprint), {'min': 335, 'max': 4188, 'bands': ['B4', 'B3', 'B2']}, 'wetImg'); // add filtered image for year defined above to map
+}
+
+// ================================================================
+//              visualize images in filmstrip
+// ================================================================
+
+var myImg = wetYear.filter(ee.Filter.eq('year',2015)).first(); // define which year's image is going to be added to map
+
+print(myImg, 'myImg'); // print image to console to see properties
+
+Map.addLayer (myImg.clip(footprint), {'min': 670, 'max': 3062, 'bands': ['B4', 'B3', 'B2']}, 'img'); // add image for year defined above to map
+
+var visArgs = {bands: ['B4', 'B3', 'B2'], min: 335, max: 4188}; // choose bands for images in filmstrip here (4/3/2 CIR)
+
+var visFun = function(img) { // don't exactly remember what this step does
+  return img.visualize(visArgs).copyProperties(img, img.propertyNames()); // copy visArgs properties to filmstrip images, define property names?
+};
+
+var wetVis = wetYear.map(visFun); // map your filtered image collection (wetYear) using the visFun parameters/properties
+// print(wetVis, 'wetVis');
+
+var filmArg = {
+  dimensions: 600,
+  region: footprint // define region for each of 37 years imagery in the filmstrip
+};
+
+print(wetVis.getFilmstripThumbURL(filmArg)); // <-- select URL in console to view -- helps to quickly identify which years' imagery are poor quality
+
+// ============================================================================
+//            generate endmembers (i.e., covertypes of interest)
+// ============================================================================
+
+// === upland =================================================================
+{
+var uplandList = wetYear.map(function(image) { // take your filtered image collection and
+  return image.reduceRegions({ // reduce image using mean pixel values for each band and restrict to upland polygons
+    collection: upland, // change name to match geometry collection containing upland pixels here
+    reducer: ee.Reducer.mean(), // take mean pixel value of your image in the upland polygons
+    crs: 'EPSG:4326', // set crs to WGS84
+    scale: 30 // pixel size
+  });
+});
+
+var uplandList = ee.FeatureCollection(uplandList).flatten() // flatten uplandList image into a dictionary w/ 37 elements (one for each year)
+.map(function (feature) {
+    return ee.Feature(null, {dict: feature.toDictionary()}); // return an empty dictionary
+  }).aggregate_array('dict'); // modify dictionary into an array [each element will contain an array of 6 values - one for each band]
+  
+var uplandList =  ee.List(ee.List.sequence(0,36).map(function(object){ // get endmember values for each of the 37 years
+  var endmemUpland = ee.Dictionary(ee.List(uplandList).get(object)).values(); // and add them to the dictionary
+  return ee.List(endmemUpland); // return dictionary as a list
+}));
+
+print(uplandList,'uplandList'); // print uplandList to console
+}
+// === shrub ================================================================ [repeat same steps as upland endmember]
+{
+var shrubList = wetYear.map(function(image) { // take your filtered image collection and
+  return image.reduceRegions({ // reduce image using mean pixel values for each band and define geometry collection
+    collection: shrub, // change name to match geometry collection containing shrub pixels here
+    reducer: ee.Reducer.mean(), // take mean pixel value of your image in the shrub polygons
+    crs: 'EPSG:4326', // set crs to WGS84
+    scale: 30 // pixel size
+  });
+});
+
+var shrubList = ee.FeatureCollection(shrubList).flatten() // flatten shrubList image into a dictionary w/ 37 elements (one for each year)
+.map(function (feature) {                                 
+    return ee.Feature(null, {dict: feature.toDictionary()}); // return an empty dictionary
+  }).aggregate_array('dict'); // modify dictionary into an array [each element will contain an array of 6 values - one for each band]
+  
+var shrubList =  ee.List(ee.List.sequence(0,36).map(function(object){ // get endmember values for each of the 37 years
+  var endmemShrub = ee.Dictionary(ee.List(shrubList).get(object)).values(); // and add them to the dictionary
+  return ee.List(endmemShrub); // return dictionary as a list
+}));
+
+print(shrubList,'shrubList'); // print shrubList to console
+}
+// === soil ================================================================= [repeat same steps as other endmembers]
+{
+var soilList = wetYear.map(function(image) { // take your filtered image collection and
+  return image.reduceRegions({ // reduce image using mean pixel values for each band and define geometry collection
+    collection: soil, // change name to match geometry collection containing soil pixels here
+    reducer: ee.Reducer.mean(), // take mean pixel value of your image inside of the soil polygons
+    crs: 'EPSG:4326', // set crs to WGS84
+    scale: 30 // pixel size
+  });
+});
+
+var soilList = ee.FeatureCollection(soilList).flatten() // flatten soilList image into a dictionary w/ 37 elements (one for each year)
+.map(function (feature) { 
+    return ee.Feature(null, {dict: feature.toDictionary()}); // return an empty dictionary 
+  }).aggregate_array('dict'); // modify dictionary into an array [each element will contain an array of 6 values - one for each band]
+
+var soilList =  ee.List(ee.List.sequence(0,36).map(function(object){ // get endmember values for each of the 37 years
+  var endmemSoil = ee.Dictionary(ee.List(soilList).get(object)).values(); // and add them to the dictionary
+  return ee.List(endmemSoil); // return dictionary as a list
+}));
+
+print(soilList,'soilList'); // print soilList to console
+}
+// === ndvi =================================================================
+{
+
+var list1 = [ // Percentile NDVI pixel value for each of 37 years, rounding to nearest tenth (1984 - 2020)
+  ee.List([0.5]),ee.List([0.1]),ee.List([0.5]),ee.List([0.5]),ee.List([0.5]),
+  ee.List([0.6]),ee.List([0.6]),ee.List([0.5]),ee.List([0.6]),ee.List([0.6]),
+  ee.List([0.6]),ee.List([0.6]),ee.List([0.7]),ee.List([0.6]),ee.List([0.6]),
+  ee.List([0.5]),ee.List([0.8]),ee.List([0.5]),ee.List([0.6]),ee.List([0.5]),
+  ee.List([0.8]),ee.List([0.8]),ee.List([0.6]),ee.List([0.7]),ee.List([0.7]),
+  ee.List([0.5]),ee.List([0.6]),ee.List([0.6]),ee.List([0.6]),ee.List([0.7]),
+  ee.List([0.7]),ee.List([0.7]),ee.List([0.7]),ee.List([0.6]),ee.List([0.6]),
+  ee.List([0.8]),ee.List([0.6])
+  ];
+
+var ndviThld = ee.List(list1);  // convert percentile NDVI pixel values into threshold list
+// print(ndviThld,'ndviThld');
+
+var ndviMask = ee.ImageCollection(ee.List.sequence(0,36).getInfo().map(function(object){ // create ImageCollection for masked NDVI values to be mapped to below
+ 
+  var year = 1984 + object;
+  // print(year, 'year');
+  var img = ee.Image(wetYear.filter(ee.Filter.rangeContains('year',year,year+1)).first()); // define range of years to be included in your NDVI image
+  var ndvi = ee.Image(img.normalizedDifference(['B4', 'B3'])); // define bands to be used in normalized difference veg index
+  ndvi = ndvi.select([0], ['ndvi']).clipToCollection(wetPoly); // select NDVI pixel values, clip to your study region (wetPoly)
+  var ndviGTE = ndviThld.get(object); // turn the clipped NDVI pixel values into an object
+// print(ndviGTE, 'ndviGTE');
+  return ee.Image(img).addBands(ndvi).updateMask(ndvi.gte(ee.Number(ndviGTE))); // update ImageCollection mask with images
+}));                                                                            // containing pixel values for each NDVI band
+
+// Map.addLayer(ndviMask.filterMetadata('year','equals',2004).select([6]),{palette: '00FF00'},'NDVI mask');
+
+var ndviMask = ndviMask.map(maskCollectionNDVI); // convert the NDVI images into an image collection (37 elements - one for each year)
+print(ndviMask,'ndviMask'); // print to console
+
+// +++ same steps as upland, shrub, and soil endmember generation +++
+var ndviList = ndviMask.map(function(image){ // generate NDVI endmembers list by calculating mean values 
+  return image.reduceRegions({               // of masked pixels (i.e. areas above percentile threshold) within footprint (image boundary)
+    reducer: ee.Reducer.mean(),              // choose reducer
+    collection: footprint,                   // define boundary
+    crs: 'EPSG:4326',                        // set crs to WGS84
+    scale: 30,                               // pixel size
+    // tileScale: 16
+  });
+});
+// print(ndviList, 'ndviList'); 
+
+var ndviList = ee.FeatureCollection(ndviList).flatten() // flatten ndviList image into a dictionary w/ 37 elements (one for each year)
+.map(function (feature) {
+    return ee.Feature(null, {dict: feature.toDictionary()}); // return an empty dictionary
+  }).aggregate_array('dict'); // modify dictionary into an array [each element will contain an array of 6 values - one for each band]
+
+var ndviList = ee.List(ee.List.sequence(0,36).map(function(object){         // get endmember values for each of the 37 years
+  var endmemNDVI = ee.Dictionary(ee.List(ndviList).get(object)).values();   // and add them to the dictionary
+  return ee.List(endmemNDVI);                                               // return dictionary as a list
+}));
+
+print(ndviList, 'ndviList'); // print ndviList to console
+}
+// === ndwi =================================================================
+{
+
+var list2 = [ // Percentile NDWI pixel value for each of 37 years, rounding to nearest tenth (1984 - 2020)
+  ee.List([0.1]),ee.List([0.0]),ee.List([0.2]),ee.List([0.3]),ee.List([0.0]),
+  ee.List([0.1]),ee.List([0.1]),ee.List([0.0]),ee.List([0.1]),ee.List([0.2]),
+  ee.List([0.1]),ee.List([0.1]),ee.List([0.2]),ee.List([0.3]),ee.List([0.2]),
+  ee.List([0.3]),ee.List([0.2]),ee.List([0.2]),ee.List([0.1]),ee.List([0.2]),
+  ee.List([0.1]),ee.List([0.1]),ee.List([0.1]),ee.List([-0.2]),ee.List([0.2]),
+  ee.List([0.1]),ee.List([0.1]),ee.List([0.0]),ee.List([0.1]),ee.List([0.2]),
+  ee.List([0.5]),ee.List([0.3]),ee.List([0.4]),ee.List([0.2]),ee.List([0.2]),
+  ee.List([0.3]),ee.List([0.2])
+  ];
+
+var ndwiThld = ee.List(list2);
+
+var ndwiMask = ee.ImageCollection(ee.List.sequence(0,36).getInfo().map(function(object){ // create ImageCollection for masked NDWI values to be added to below
+ 
+  var year = 1984 + object;
+  var img = ee.Image(wetYear.filter(ee.Filter.rangeContains('year',year,year+1)).first()); // define range of years to be included in your NDWI image
+  var ndwi = ee.Image(img.normalizedDifference(['B3', 'B5'])); // define bands to be used in normalized difference water index
+  ndwi = ndwi.select([0], ['ndwi']).clipToCollection(wetPoly); // select NDWI pixel values, clip to your study region (wetPoly)
+  var ndwiGTE = ndwiThld.get(object); // turn the clipped NDWI pixel values into an object
+
+  return ee.Image(img).addBands(ndwi).updateMask(ndwi.gte(ee.Number(ndwiGTE))); // update ImageCollection mask with images
+}));                                                                            // containing pixel values for each NDWI band
+
+// Map.addLayer(ndwiMask.filterMetadata('year','equals',2001).select([6]),{palette: '00FF00'},'NDWI mask');
+
+var ndwiMask = ndwiMask.map(maskCollectionNDWI); // convert the NDWI images into an image collection (37 elements - one for each year)
+print(ndwiMask,'ndwiMask'); // print to console
+
+// +++ same steps as upland, shrub, soil, and NDVI endmember generation +++
+var ndwiList = ndwiMask.map(function(image){ // generate NDWI endmembers list by calculating mean values 
+  return image.reduceRegions({               // of masked pixels (i.e. areas above percentile threshold) within footprint (image boundary)
+    reducer: ee.Reducer.mean(),              // choose reducer
+    collection: footprint,                   // define boundary
+    crs: 'EPSG:4326',                        // set crs to WGS84
+    scale: 30,                               // pixel size
+    // tileScale: 16
+  });
+});
+
+var ndwiList = ee.FeatureCollection(ndwiList).flatten() // flatten ndwiList image into a dictionary w/ 37 elements (one for each year)
+.map(function (feature) {
+    return ee.Feature(null, {dict: feature.toDictionary()}); // return an empty dictionary
+  }).aggregate_array('dict'); // modify dictionary into an array [each element will contain an array of 6 values - one for each band]
+
+var ndwiList = ee.List(ee.List.sequence(0,36).map(function(object){        // get endmember values for each of the 37 years
+  var endmemNDWI = ee.Dictionary(ee.List(ndwiList).get(object)).values();  // and add them to the dictionary
+    return ee.List(endmemNDWI);                                            // return dictionary as a list
+}));
+
+print(ndwiList, 'ndwiList'); // print ndwiList to console
+
+}
+//============================================================================
+//    unmix collection - classify water 
+//============================================================================
+
+// remove years from ImageCollection with poor image quality in filmstrip [1985, 1986, 1988, 1993, 1995, 1998, 2000, 2002, 2003, 2007, 2008, 2009, 2012, 2013, 2017]
+// there's a better way to go about this so you don't omit entire years from analysis - remember what that is!!! 
+// if you don't do this, endmember lists will return empty values and cause the script to fail
+var satList = [
+0, 3, 5, 6, 7, 8, 10, 12, 13, 15, 17, 20, 21, 22, 26, 27, 30, 31, 32, 34, 35, 36 // values correspond to list values in ImageCollection for years of imagery to keep
+  ];
+ 
+  print(satList, 'satList'); // print satList to console
+
+{
+var wetUnmix =  ee.ImageCollection(ee.List(satList).getInfo().map(function(object){ // create image collection to only include years (22) defined in 'satList' above
+  var year = 1984 + object;                                                         // set it up iterate through each year in satList, starting at first year in satList (1984)
+  var img = ee.Image(wetYear.filterDate(year.toString(), (year+1).toString()).first());
+// add your endmember values from lists to imageCollection / unmixed image [images in image collection will have 5 bands, one for each endmember]
+  var endmemUpland = ee.List(uplandList).get(object);
+  var endmemNDVI   = ee.List(ndviList).get(object);
+  var endmemNDWI   = ee.List(ndwiList).get(object);
+  var endmemShrub  = ee.List(shrubList).get(object);
+  var endmemSoil   = ee.List(soilList).get(object);
+  
+  var sma = img.unmix([endmemUpland,endmemNDVI,endmemNDWI,endmemShrub,endmemSoil], true, true) // run the spectral mixture analysis on your endmembers
+                          .setMulti(['system:time_start',img.get('system:time_start')]) // set image properties (metadata) - year & system time start
+                          .setMulti(['year',img.get('year')])
+                          .setMulti(['dateMillis',img.get('system:time_start')]);
+  return ee.Image(sma);//.clip(wetPoly);   // return unmixed images to imageCollection, could clip to study area boundary here if not already done above
+  }));
+print(wetUnmix, 'WETUNMIX'); // print elements in SMA image collection to console
+
+var unmixed = (wetUnmix.filterMetadata('year','equals',2015)).first(); // define what year's SMA is going to be added to the map
+// print(unmixed, 'unmixed');
+Map.addLayer (ee.Image(unmixed).clip(wetPoly),null,'unmixed'); // add the unmixed image containing SMA results to your map for year defined above
+}
+
+// ============================================================================
+//                               visualize data
+// ============================================================================
+// {
+// === visualize surface water ===================================================
+var watVis = {
+  min:0.2, // include pixels that are at least 20% water
+  max:1,   // and less than 100% water
+  palette: ['blue', 'blue'] // color those pixels blue
+};
+
+var unmixWater = (wetUnmix.filterMetadata('year','equals',2015)).select('band_2').first(); // define the year to pull from WETUNMIX image collection, define band to pull (band 2 - NDWI)
+var unmixMask = unmixWater.updateMask(unmixWater).gte(0.20); // mask the unmixed images using pixels that are at least 20% water
+var unmixWater = unmixWater.mask(unmixMask).updateMask(wetPoly); // mask the water pixels to your study area (wetPoly)
+var unmixWater = unmixWater.multiply(ee.Image.pixelArea()).divide(10000); // <--- turn pixels to ha to estimate area
+Map.addLayer({ // add your unmixed water layer (pixels ≥ 20%) to map
+  eeObject:unmixMask.updateMask(unmixMask.divide(1).clip(wetPoly)), // clip pixels to study area (wetPoly)
+  name:'wat', // define layer name in map
+  visParams: watVis // define visual parameters
+});
+
+// ============================================================================
+//            reduce and export surface water area data as table
+// ============================================================================
+
+var wetReduced = ee.Image(unmixMask)
+    .reduceRegions({ // reduce pixels in your unmixed water layer
+      collection: wetPoly, // within your study area (wetPoly) polygons
+      reducer: ee.Reducer.sum(), // choose your reducer (sum hectares water)
+      scale: 30, // pixel size
+      crs: 'EPSG:4326', // coordinate system (WGS84)
+      tileScale: 1
+    });
+   
+var wetnoGeo = wetReduced.map(function(feature) {   // <-- remove geometry for export
+      return ee.Feature(feature.select([".*"], null, false)); // return feature collection with values for each polygon in study area
+    });   
+
+Export.table.toDrive({ // export .CSV to Google Drive
+  folder: 'LGRW_outputsGEE', // <-- change destination folder name here
+  collection: wetReduced, // define your feature collection -- change to wetReduced if you want geometry
+  description:'LGRW_WetHectares_annual_2022version', // <-- change file name here
+  fileFormat: 'CSV' // file format here
+});
+
+// +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ //
+
+// // =====================================================================================
+// //                               TerraClim Time Series
+// // =====================================================================================
+
+// *Uses TerraClimate to sum climate variable monthly and calc mean within a region(s) as a time series over migration year (OCT 1 to DEC 31). 
+// Returns a *.csv table.*
+
+Map.addLayer(ee.Image().paint(wetPoly, 1, 3), null, 'wetPoly'); // check geometery of study region
+
+// Create a sum climate imageCollection for each month (1984-2020) using TerraClim data
+var climateYear =  ee.ImageCollection(ee.List.sequence(1984, 2020).map(function (x){
+// Load Terraclimate and filter by each month of the year
+  var date_start = ee.Date.fromYMD(x, 10, 1);
+  var date_end = date_start.advance(3, 'month');
+  return  ee.ImageCollection('IDAHO_EPSCOR/TERRACLIMATE')
+                        .select(['ro','swe','pr','pet','soil','def','aet']) // <--- change summary band here
+                        .filterDate(date_start, date_end)
+                        .filterBounds(footprint)
+                        .sum() // <--- change summary function here
+                        .set({'year': x, 'system:time_start':date_start});
+}));
+
+print(climateYear, 'climateYear');
+
+var climImg = climateYear.filter(ee.Filter.eq('year', 2015)).first();
+
+// Map.addLayer(climImg.select('pr').clip(footprint),null,'climImg');
+
+var climateYearMean = climateYear.map(function(x) {
+  return x.reduceRegions({
+    collection: footprint,
+    reducer: ee.Reducer.mean(), // change reducer for different summary outputs **************************
+    scale: 4000,
+    crs: 'EPSG:4326',
+    tileScale: 1
+  }).map(function(y){return y.set({'month': x.get('month')})});
+  }); 
+print(climateYearMean, 'climateYEARmean');
+
+var climateMean = (ee.FeatureCollection(climateYearMean).flatten()); 
+print(climateMean, 'climateMeanFlat');
+
+var climateNoGeo = climateMean.map(function(feature) {
+return ee.Feature(feature.select([".*"], null, true)); // set to true if you want to retain geometry
+});
+
+Export.table.toDrive({
+  folder: 'LGRW_outputsGEE',
+  collection: climateNoGeo,
+  description:'TerraClim_OctNovDec_TempMeans_LGRW',
+  fileFormat: 'CSV'
+});
